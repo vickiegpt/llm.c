@@ -25,6 +25,16 @@ NVCC_CUDNN =
 # By default we don't build with cudnn because it blows up compile time from a few seconds to ~minute
 USE_CUDNN ?= 0
 
+# WASI-NN and enhanced MPI support flags
+USE_WASI_NN ?= 0
+USE_ENHANCED_MPI ?= 0
+
+# WASI SDK configuration
+WASI_SDK ?= /opt/wasi-sdk
+WASI_CC = $(WASI_SDK)/bin/clang
+WASI_CFLAGS = --target=wasm32-wasi --sysroot=$(WASI_SDK)/share/wasi-sysroot -I/Volumes/Untitled/wasm-micro-runtime/core/iwasm/libraries/wasi-nn/include/  -O2
+WASI_LDFLAGS = -Wl,--allow-undefined
+
 # We will place .o files in the `build` directory (create it if it doesn't exist)
 BUILD_DIR = build
 ifeq ($(OS), Windows_NT)
@@ -225,8 +235,27 @@ else ifeq ($(shell [ -d $(OPENMPI_LIB_PATH) ] && [ -d $(OPENMPI_INCLUDE_PATH) ] 
   NVCC_LDFLAGS += -L$(OPENMPI_LIB_PATH)
   NVCC_LDLIBS += -lmpi
   NVCC_FLAGS += -DUSE_MPI
+  # Add enhanced MPI support if requested
+  ifeq ($(USE_ENHANCED_MPI), 1)
+    $(info ✓ Enhanced MPI support enabled)
+    NVCC_FLAGS += -DUSE_ENHANCED_MPI
+    SOURCES_MPI = llmc/mpi_comm.c
+  endif
 else
   $(info ✗ MPI not found)
+endif
+
+# WASI-NN support detection
+ifeq ($(USE_WASI_NN), 1)
+  ifeq ($(shell [ -d $(WASI_SDK) ] && echo "exists"), exists)
+    $(info ✓ WASI-NN support enabled with WASI SDK at $(WASI_SDK))
+    WASI_FLAGS += -DUSE_WASI_NN
+    SOURCES_WASI = llmc/wasi_nn_backend.c
+  else
+    $(error ✗ WASI SDK not found at $(WASI_SDK). Set WASI_SDK path or disable with USE_WASI_NN=0)
+  endif
+else
+  $(info → WASI-NN support disabled (set USE_WASI_NN=1 to enable))
 endif
 
 # Precision settings, default to bf16 but ability to override
@@ -244,7 +273,7 @@ else
 endif
 
 # PHONY means these targets will always be executed
-.PHONY: all train_gpt2 test_gpt2 train_gpt2cu test_gpt2cu train_gpt2fp32cu test_gpt2fp32cu profile_gpt2cu
+.PHONY: all train_gpt2 test_gpt2 train_gpt2cu test_gpt2cu train_gpt2fp32cu test_gpt2fp32cu profile_gpt2cu train_gpt2_mpi train_gpt2_wasi
 
 # Add targets
 TARGETS = train_gpt2 test_gpt2
@@ -255,6 +284,16 @@ ifeq ($(NVCC),)
 else
     $(info ✓ nvcc found, including GPU/CUDA support)
     TARGETS += train_gpt2cu test_gpt2cu train_gpt2fp32cu test_gpt2fp32cu $(NVCC_CUDNN)
+endif
+
+# Conditional inclusion of enhanced MPI targets
+ifeq ($(USE_ENHANCED_MPI), 1)
+    TARGETS += train_gpt2_mpi
+endif
+
+# Conditional inclusion of WASI targets
+ifeq ($(USE_WASI_NN), 1)
+    TARGETS += train_gpt2_wasi
 endif
 
 $(info ---------------------------------------------)
@@ -285,6 +324,15 @@ test_gpt2fp32cu: test_gpt2_fp32.cu
 profile_gpt2cu: profile_gpt2.cu $(NVCC_CUDNN)
 	$(NVCC) $(NVCC_FLAGS) $(PFLAGS) -lineinfo $^ $(NVCC_LDFLAGS) $(NVCC_INCLUDES) $(NVCC_LDLIBS)  $(CUDA_OUTPUT_FILE)
 
+# Enhanced MPI build target
+train_gpt2_mpi: train_gpt2_mpi.c llmc/mpi_comm.c
+	mpicc $(CFLAGS) -DUSE_ENHANCED_MPI $(INCLUDES) -I$(OPENMPI_INCLUDE_PATH) \
+		$(LDFLAGS) -L$(OPENMPI_LIB_PATH) $^ $(LDLIBS) -lmpi $(OUTPUT_FILE)
+
+# WASI-NN build target  
+train_gpt2_wasi: train_gpt2_wasi.c llmc/wasi_nn_backend.c
+	$(WASI_CC) $(WASI_CFLAGS) $(WASI_FLAGS) -I. $^ $(WASI_LDFLAGS) -o $@.wasm
+
 clean:
-	$(REMOVE_FILES) $(TARGETS)
+	$(REMOVE_FILES) $(TARGETS) train_gpt2_mpi train_gpt2_wasi.wasm
 	$(REMOVE_BUILD_OBJECT_FILES)
