@@ -110,7 +110,7 @@ wasi_nn_tensor_t* wasi_nn_create_tensor(const char* name, float* data,
     wasi_nn_tensor_t* tensor = (wasi_nn_tensor_t*)calloc(1, sizeof(wasi_nn_tensor_t));
     if (!tensor) return NULL;
     
-    tensor->name = strdup(name);
+    tensor->name = name;
     tensor->num_dims = num_dims;
     
     // Copy dimensions
